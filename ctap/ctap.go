@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 
 	"github.com/bulwarkid/virtual-fido/cose"
 	"github.com/bulwarkid/virtual-fido/crypto"
@@ -105,7 +106,7 @@ type ctapBasicAttestationStatement struct {
 }
 
 func ctapMakeAttestedCredentialData(credentialSource *identities.CredentialSource) []byte {
-	encodedCredentialPublicKey := cose.EncodeKeyAsCOSE(&credentialSource.PrivateKey.PublicKey)
+	encodedCredentialPublicKey := cose.EncodeKeyAsCOSE([]byte{1}, []byte{2}) // todo
 	return util.Flatten([][]byte{aaguid[:], util.ToBE(uint16(len(credentialSource.ID))), credentialSource.ID, encodedCredentialPublicKey})
 }
 
@@ -190,6 +191,18 @@ type ctapMakeCredentialReponse struct {
 	FormatIdentifer      string                        `cbor:"1,keyasint"`
 	AuthData             []byte                        `cbor:"2,keyasint"`
 	AttestationStatement ctapBasicAttestationStatement `cbor:"3,keyasint"`
+}
+
+// helper for reading in socket data
+func reader(r io.Reader, size int) {
+	buf := make([]byte, size)
+	for {
+		n, err := r.Read(buf[:])
+		if err != nil {
+			return
+		}
+		println("Client got:", string(buf[0:n]))
+	}
 }
 
 func (server *CTAPServer) handleMakeCredential(data []byte) []byte {
@@ -334,13 +347,19 @@ func (server *CTAPServer) handleGetAssertion(data []byte) []byte {
 		return []byte{byte(CTAP2_ERR_NO_CREDENTIALS)}
 	}
 
-	if args.Options.UserPresence {
-		if !server.client.ApproveAccountLogin(credentialSource) {
-			ctapLogger.Printf("ERROR: Unapproved action (Account login)")
-			return []byte{byte(CTAP2_ERR_OPERATION_DENIED)}
-		}
-		flags = flags | CTAP_AUTH_DATA_FLAG_USER_PRESENT
+	if !server.client.ApproveAccountLogin(credentialSource) {
+		ctapLogger.Printf("ERROR: Unapproved action (Account login)")
+		return []byte{byte(CTAP2_ERR_OPERATION_DENIED)}
 	}
+	// if args.Options.UserPresence {
+	// 	if !server.client.ApproveAccountLogin(credentialSource) {
+	// 		ctapLogger.Printf("ERROR: Unapproved action (Account login)")
+	// 		return []byte{byte(CTAP2_ERR_OPERATION_DENIED)}
+	// 	}
+	// 	flags = flags | CTAP_AUTH_DATA_FLAG_USER_PRESENT
+	// }
+
+	flags = flags | CTAP_AUTH_DATA_FLAG_USER_PRESENT
 
 	authData := ctapMakeAuthData(args.RpID, credentialSource, nil, flags)
 	signature := crypto.Sign(credentialSource.PrivateKey, util.Flatten([][]byte{authData, args.ClientDataHash}))

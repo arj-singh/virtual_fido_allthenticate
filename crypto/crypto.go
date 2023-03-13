@@ -66,6 +66,7 @@ func Decrypt(key []byte, data []byte, nonce []byte) ([]byte, error) {
 }
 
 func Sign(key *ecdsa.PrivateKey, data []byte) []byte {
+	fmt.Println(data)
 	hash := sha256.Sum256(data)
 	signature, err := ecdsa.SignASN1(rand.Reader, key, hash[:])
 	util.CheckErr(err, "Could not sign data")

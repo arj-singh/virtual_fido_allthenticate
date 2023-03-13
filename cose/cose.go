@@ -1,7 +1,6 @@
 package cose
 
 import (
-	"crypto/ecdsa"
 	"encoding/hex"
 	"fmt"
 
@@ -46,13 +45,13 @@ func (key *COSEPublicKey) String() string {
 		hex.EncodeToString(key.Y))
 }
 
-func EncodeKeyAsCOSE(publicKey *ecdsa.PublicKey) []byte {
+func EncodeKeyAsCOSE(x, y []byte) []byte {
 	key := COSEPublicKey{
 		KeyType:   int8(COSE_KEY_TYPE_EC2),
 		Algorithm: int8(COSE_ALGORITHM_ID_ES256),
 		Curve:     int8(COSE_CURVE_ID_P256),
-		X:         publicKey.X.Bytes(),
-		Y:         publicKey.Y.Bytes(),
+		X:         x,
+		Y:         y,
 	}
 	return util.MarshalCBOR(key)
 }
