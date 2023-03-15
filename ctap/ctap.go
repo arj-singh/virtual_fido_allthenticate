@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/bulwarkid/virtual-fido/cose"
 	"github.com/bulwarkid/virtual-fido/crypto"
@@ -105,8 +106,19 @@ type ctapBasicAttestationStatement struct {
 	X5c [][]byte             `cbor:"x5c"`
 }
 
-func ctapMakeAttestedCredentialData(credentialSource *identities.CredentialSource) []byte {
-	encodedCredentialPublicKey := cose.EncodeKeyAsCOSE([]byte{1}, []byte{2}) // todo
+func ctapMakeAttestedCredentialData(credentialSource *identities.CredentialSource, wg *sync.WaitGroup) []byte {
+
+	var x []byte
+	var y []byte
+	wg.Add(1)
+	go requestX(&x, wg)
+	wg.Wait()
+
+	wg.Add(1)
+	go requestY(&y, wg)
+	wg.Wait()
+
+	encodedCredentialPublicKey := cose.EncodeKeyAsCOSE(x, y)
 	return util.Flatten([][]byte{aaguid[:], util.ToBE(uint16(len(credentialSource.ID))), credentialSource.ID, encodedCredentialPublicKey})
 }
 
@@ -206,6 +218,9 @@ func reader(r io.Reader, size int) {
 }
 
 func (server *CTAPServer) handleMakeCredential(data []byte) []byte {
+
+	var wg sync.WaitGroup
+
 	var args ctapMakeCredentialArgs
 	err := cbor.Unmarshal(data, &args)
 	util.CheckErr(err, fmt.Sprintf("Could not decode CBOR for MAKE_CREDENTIAL: %s %v", err, data))
@@ -237,18 +252,43 @@ func (server *CTAPServer) handleMakeCredential(data []byte) []byte {
 		}
 	}
 
-	if !server.client.ApproveAccountCreation(args.Rp.Name) {
+	// y/n prompt
+	var allowed string
+	wg.Add(1)
+	go requestAuth(&allowed, args.Rp.Name, &wg)
+	wg.Wait()
+
+	if allowed != "AUTH_OK" {
 		ctapLogger.Printf("ERROR: Unapproved action (Create account)")
 		return []byte{byte(CTAP2_ERR_OPERATION_DENIED)}
 	}
+
+	fmt.Println("Has been allowed")
+
+	// if !server.client.ApproveAccountCreation(args.Rp.Name) {
+	// 	ctapLogger.Printf("ERROR: Unapproved action (Create account)")
+	// 	return []byte{byte(CTAP2_ERR_OPERATION_DENIED)}
+	// }
 	flags = flags | CTAP_AUTH_DATA_FLAG_USER_PRESENT
 
 	credentialSource := server.client.NewCredentialSource(args.Rp, args.User)
-	attestedCredentialData := ctapMakeAttestedCredentialData(credentialSource)
+	attestedCredentialData := ctapMakeAttestedCredentialData(credentialSource, &wg)
 	authenticatorData := ctapMakeAuthData(args.Rp.Id, credentialSource, attestedCredentialData, flags)
 
-	attestationCert := server.client.CreateAttestationCertificiate(credentialSource.PrivateKey)
-	attestationSignature := crypto.Sign(credentialSource.PrivateKey, append(authenticatorData, args.ClientDataHash...))
+	fmt.Println("Passed Attested Credential Data")
+
+	var attestationCert []byte
+	var attestationSignature []byte
+	// attestationCert := server.client.CreateAttestationCertificiate(credentialSource.PrivateKey)
+	// attestationSignature := crypto.Sign(credentialSource.PrivateKey, append(authenticatorData, args.ClientDataHash...))
+	wg.Add(1)
+	go requestCert(&attestationCert, &wg)
+	wg.Wait()
+
+	wg.Add(1)
+	go requestSignature(&attestationSignature, append(authenticatorData, args.ClientDataHash...), &wg)
+	wg.Wait()
+
 	attestationStatement := ctapBasicAttestationStatement{
 		Alg: cose.COSE_ALGORITHM_ID_ES256,
 		Sig: attestationSignature,
@@ -318,6 +358,9 @@ type ctapGetAssertionResponse struct {
 }
 
 func (server *CTAPServer) handleGetAssertion(data []byte) []byte {
+
+	var wg sync.WaitGroup
+
 	var flags uint8 = 0
 	var args ctapGetAssertionArgs
 	err := cbor.Unmarshal(data, &args)
@@ -347,10 +390,17 @@ func (server *CTAPServer) handleGetAssertion(data []byte) []byte {
 		return []byte{byte(CTAP2_ERR_NO_CREDENTIALS)}
 	}
 
-	if !server.client.ApproveAccountLogin(credentialSource) {
-		ctapLogger.Printf("ERROR: Unapproved action (Account login)")
+	// y/n prompt
+	var allowed string
+	wg.Add(1)
+	go requestAuth(&allowed, "", &wg)
+	wg.Wait()
+
+	if allowed != "AUTH_OK" {
+		ctapLogger.Printf("ERROR: Unapproved action (Account Login)")
 		return []byte{byte(CTAP2_ERR_OPERATION_DENIED)}
 	}
+
 	// if args.Options.UserPresence {
 	// 	if !server.client.ApproveAccountLogin(credentialSource) {
 	// 		ctapLogger.Printf("ERROR: Unapproved action (Account login)")
@@ -362,7 +412,13 @@ func (server *CTAPServer) handleGetAssertion(data []byte) []byte {
 	flags = flags | CTAP_AUTH_DATA_FLAG_USER_PRESENT
 
 	authData := ctapMakeAuthData(args.RpID, credentialSource, nil, flags)
-	signature := crypto.Sign(credentialSource.PrivateKey, util.Flatten([][]byte{authData, args.ClientDataHash}))
+
+	var signature []byte
+	wg.Add(1)
+	requestSignature(&signature, util.Flatten([][]byte{authData, args.ClientDataHash}), &wg)
+	wg.Wait()
+
+	// signature := crypto.Sign(credentialSource.PrivateKey, util.Flatten([][]byte{authData, args.ClientDataHash}))
 
 	credentialDescriptor := credentialSource.CTAPDescriptor()
 	response := ctapGetAssertionResponse{

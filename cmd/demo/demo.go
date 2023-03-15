@@ -68,8 +68,6 @@ func deleteIdentity(cmd *cobra.Command, args []string) {
 }
 
 func start(cmd *cobra.Command, args []string) {
-	// run a websocket server
-	launch_socket_server()
 	client := createClient()
 	runServer(client)
 }
